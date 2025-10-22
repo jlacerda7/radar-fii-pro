@@ -1,5 +1,3 @@
 streamlit
 pandas
 selenium
-requests
-beautifulsoup4
