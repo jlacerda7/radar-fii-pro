@@ -1,15 +1,13 @@
-# --- VERSÃO DE PRODUÇÃO (CLOUD) v5 ---
-# --- USA CHROMIUM (NÃO REQUER WEBDRIVER-MANAGER) ---
+# --- VERSÃO DE PRODUÇÃO (CLOUD) v7 ---
+# --- ROBÔ MAIS PACIENTE E COM 3 TENTATIVAS ---
 
 import pandas as pd
-import time
+import time # <<< Importamos o 'time' para as pausas
 import streamlit as st
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-# --- MUDANÇAS PARA A NUVEM (CHROMIUM) ---
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-# --- FIM DAS MUDANÇAS ---
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import re
@@ -28,6 +26,7 @@ FII_LIST = [
     "RECR11", "XPLG11", "BRCO11", "PVBI11", "BTLG11",
     "RBRR11", "JSRE11", "VILG11", "GGRC11", "TGAR11"
 ]
+MAX_TENTATIVAS = 3 # <<< Quantas vezes tentar antes de desistir
 
 def inicializar_db():
     conn = sqlite3.connect(DB_FILE)
@@ -43,26 +42,21 @@ def inicializar_db():
     conn.commit()
     conn.close()
 
-# --- FUNÇÃO ATUALIZAR_DADOS MODIFICADA PARA A NUVEM (CHROMIUM) ---
-@st.cache_resource(show_spinner=False) # Cacheia o driver
+@st.cache_resource(show_spinner=False)
 def get_driver():
-    """Configura e retorna o driver do Selenium para a nuvem (Chromium)."""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    
-    # Aponta para o driver que o 'packages.txt' instalou no sistema
     service = Service(executable_path="/usr/bin/chromedriver")
-    
     driver = webdriver.Chrome(service=service, options=options)
     return driver
 
+# --- FUNÇÃO ATUALIZAR_DADOS (V7 - MAIS ROBUSTA) ---
 def atualizar_dados_fiis():
-    """Função do robô (Selenium) para buscar e salvar os dados no DB."""
     status_placeholder = st.empty()
-    status_placeholder.info(f"Iniciando busca por {len(FII_LIST)} FIIs... Isso pode levar alguns minutos.")
+    status_placeholder.info(f"Iniciando busca por {len(FII_LIST)} FIIs... (Robô V7 com {MAX_TENTATIVAS} tentativas)")
     
     dados_fiis_lista = [] 
     
@@ -75,31 +69,53 @@ def atualizar_dados_fiis():
     progress_bar = st.progress(0)
     
     for i, ticker in enumerate(FII_LIST):
-        try:
-            url = f"https://statusinvest.com.br/fundos-imobiliarios/{ticker}"
-            driver.get(url)
-            
-            wait = WebDriverWait(driver, 10)
-            pvp_xpath = "//h3[contains(text(), 'P/VP')]/following-sibling::strong"
-            dy_xpath = "//h3[contains(text(), 'Dividend Yield')]/following-sibling::strong"
-            
-            pvp_element = wait.until(EC.presence_of_element_located((By.XPATH, pvp_xpath)))
-            pvp_str = pvp_element.text
-            
-            dy_element = driver.find_element(By.XPATH, dy_xpath)
-            dy_str = dy_element.text
-            
-            pvp_final = float(pvp_str.replace(",", "."))
-            dy_final = float(dy_str.replace(",", ".").replace("%", "").replace("N/A", "0"))
-            
-            dados_fiis_lista.append((ticker, pvp_final, dy_final))
-            
-            progress_bar.progress((i + 1) / len(FII_LIST), text=f"Buscando {ticker}...")
-            
-        except Exception as e:
-            print(f"[ERRO] Falha ao processar {ticker}: {e}")
-            
-    # driver.quit() # Não quitamos o driver por causa do cache @st.cache_resource
+        ticker_data = None # Reseta o dado do ticker
+        
+        # --- LÓGICA DE TENTATIVAS (RETRY) ---
+        for tentativa in range(MAX_TENTATIVAS):
+            try:
+                url = f"https://statusinvest.com.br/fundos-imobiliarios/{ticker}"
+                driver.get(url)
+                
+                # Timeout maior: 15 segundos
+                wait = WebDriverWait(driver, 15) 
+                
+                pvp_xpath = "//h3[contains(text(), 'P/VP')]/following-sibling::strong"
+                dy_xpath = "//h3[contains(text(), 'Dividend Yield')]/following-sibling::strong"
+                
+                # Espera o P/VP carregar
+                pvp_element = wait.until(EC.presence_of_element_located((By.XPATH, pvp_xpath)))
+                pvp_str = pvp_element.text
+                
+                # Acha o DY (geralmente já carregou se o P/VP carregou)
+                dy_element = driver.find_element(By.XPATH, dy_xpath)
+                dy_str = dy_element.text
+                
+                pvp_final = float(pvp_str.replace(",", "."))
+                dy_final = float(dy_str.replace(",", ".").replace("%", "").replace("N/A", "0"))
+                
+                # Se chegou aqui, deu certo!
+                ticker_data = (ticker, pvp_final, dy_final)
+                
+                progress_bar.progress((i + 1) / len(FII_LIST), text=f"Buscando {ticker}... [OK]")
+                
+                time.sleep(0.5) # Pausa de 0.5s para parecer mais humano
+                break # Sai do loop de tentativas (pois deu certo)
+                
+            except Exception as e:
+                # Se falhou, registra o erro e tenta de novo
+                print(f"[ERRO Tentativa {tentativa+1}/{MAX_TENTATIVAS}] Falha ao processar {ticker}: {e}")
+                time.sleep(1) # Espera 1s antes de tentar de novo
+        
+        # Depois de 3 tentativas, verifica se o 'ticker_data' foi salvo
+        if ticker_data:
+            dados_fiis_lista.append(ticker_data)
+        else:
+            # Se 'ticker_data' ainda é None, falhou 3x
+            print(f"[FALHA TOTAL] {ticker} descartado após {MAX_TENTATIVAS} tentativas.")
+            progress_bar.progress((i + 1) / len(FII_LIST), text=f"Buscando {ticker}... [FALHA]")
+
+    # --- FIM DO LOOP PRINCIPAL ---
 
     progress_bar.empty()
     status_placeholder.empty()
@@ -121,6 +137,7 @@ def atualizar_dados_fiis():
     return True
 
 # --- O RESTANTE DO CÓDIGO (PARTE 2) É IDÊNTICO ---
+# (Colado abaixo para garantir que o arquivo esteja 100% correto)
 
 def carregar_dados_do_db():
     if not os.path.exists(DB_FILE):
@@ -141,25 +158,21 @@ def calcular_score_pro(df):
     if df_filtrado.empty:
         df['Score Pro'] = 0
         return df
-    # Evita divisão por zero se todos os valores forem iguais
     if (df_filtrado['DY_12M'].max() - df_filtrado['DY_12M'].min()) == 0 or (df_filtrado['P_VP'].max() - df_filtrado['P_VP'].min()) == 0:
         df_filtrado['dy_norm'] = 50
         df_filtrado['pvp_norm'] = 50
     else:
         df_filtrado['dy_norm'] = 100 * (df_filtrado['DY_12M'] - df_filtrado['DY_12M'].min()) / (df_filtrado['DY_12M'].max() - df_filtrado['DY_12M'].min())
         df_filtrado['pvp_norm'] = 100 * (df_filtrado['P_VP'].max() - df_filtrado['P_VP']) / (df_filtrado['P_VP'].max() - df_filtrado['P_VP'].min())
-        
     df_filtrado['Score Pro'] = (df_filtrado['dy_norm'] * 0.6) + (df_filtrado['pvp_norm'] * 0.4)
     df_final = df.merge(df_filtrado[['Ticker', 'Score Pro']], on='Ticker', how='left')
     df_final['Score Pro'] = df_final['Score Pro'].fillna(0).astype(int)
     return df_final
 
-# --- PARTE 2: O APLICATIVO WEB (STREAMLIT) ---
-st.title("🛰️ Radar FII Pro (Cloud V2)")
+st.title("🛰️ Radar FII Pro (Cloud V7)") # Mudei o Título para sabermos que é o V7
 st.subheader("Encontrando as melhores oportunidades em Fundos Imobiliários")
 
 inicializar_db()
-
 df_base = carregar_dados_do_db()
 data_atualizacao = None
 dados_expirados = True
@@ -176,14 +189,13 @@ st.sidebar.header("Controles")
 if st.sidebar.button("Forçar Atualização Agora (Lento)"):
     atualizar_dados_fiis()
     df_base = carregar_dados_do_db()
-    st.experimental_rerun() # Recarrega a página
+    st.experimental_rerun() 
 
 elif dados_expirados or df_base.empty:
     if df_base.empty:
         st.info("Banco de dados local vazio. Iniciando o robô de coleta...")
     else:
         st.info("Os dados estão desatualizados. Iniciando o robô de coleta...")
-    
     atualizar_dados_fiis()
     df_base = carregar_dados_do_db()
 else:
@@ -195,27 +207,24 @@ if df_base.empty:
 
 df_com_score = calcular_score_pro(df_base)
 
-# --- Filtros ---
 st.sidebar.header("Filtros Avançados")
 preco_teto_pvp = st.sidebar.slider("P/VP Máximo:", 0.5, 2.0, 1.2, 0.01)
 dy_minimo = st.sidebar.slider("Dividend Yield (12M) Mínimo (%):", 0.0, 20.0, 5.0, 0.5)
 score_minimo = st.sidebar.slider("Score Pro Mínimo (de 0 a 100):", 0, 100, 30, 5)
 
-# --- Filtragem ---
 df_filtrado = df_com_score[
     (df_com_score['P_VP'] <= preco_teto_pvp) &
     (df_com_score['DY_12M'] >= dy_minimo) &
     (df_com_score['Score Pro'] >= score_minimo)
 ]
 
-# --- Resultados ---
 st.header(f"Resultados Encontrados: {len(df_filtrado)}")
 colunas_para_exibir = {'Ticker': 'Ticker', 'Score Pro': 'Score Pro 🔥', 'P_VP': 'P/VP', 'DY_12M': 'DY (12M) %'}
 
 st.dataframe(
     df_filtrado[colunas_para_exibir.keys()]
     .sort_values(by='Score Pro', ascending=False)
-    .style.format({'Score Pro': '{:d} pts', 'P_VP': '{:.2f}', 'DY_12M': '{:.2f}%'})
+    .style.format({'Score Pro': '{:d} pts', 'P/VP': '{:.2f}', 'DY_12M': '{:.2f}%'})
     .map(lambda x: 'background-color: #3C5C3C' if x > 80 else '', subset=['Score Pro'])
     .hide(axis="index"),
     use_container_width=True
