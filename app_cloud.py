@@ -1,12 +1,13 @@
-# ESTA É A VERSÃO DE PRODUÇÃO (CLOUD)
+# --- VERSÃO DE PRODUÇÃO (CLOUD) v5 ---
+# --- USA CHROMIUM (NÃO REQUER WEBDRIVER-MANAGER) ---
+
 import pandas as pd
 import time
 import streamlit as st
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+# --- MUDANÇAS PARA A NUVEM (CHROMIUM) ---
 from selenium.webdriver.chrome.service import Service
-# --- MUDANÇAS PARA A NUVEM ---
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.options import Options
 # --- FIM DAS MUDANÇAS ---
 from selenium.webdriver.support.ui import WebDriverWait
@@ -42,18 +43,18 @@ def inicializar_db():
     conn.commit()
     conn.close()
 
-# --- FUNÇÃO ATUALIZAR_DADOS MODIFICADA PARA A NUVEM ---
+# --- FUNÇÃO ATUALIZAR_DADOS MODIFICADA PARA A NUVEM (CHROMIUM) ---
 @st.cache_resource(show_spinner=False) # Cacheia o driver
 def get_driver():
-    """Configura e retorna o driver do Selenium para a nuvem."""
+    """Configura e retorna o driver do Selenium para a nuvem (Chromium)."""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     
-    # Instala o chromedriver automaticamente
-    service = Service(ChromeDriverManager().install())
+    # Aponta para o driver que o 'packages.txt' instalou no sistema
+    service = Service(executable_path="/usr/bin/chromedriver")
     
     driver = webdriver.Chrome(service=service, options=options)
     return driver
@@ -119,8 +120,7 @@ def atualizar_dados_fiis():
     st.success(f"Busca finalizada! {len(dados_fiis_lista)} FIIs atualizados.")
     return True
 
-# O restante do código (Parte 2) é IDÊNTICO ao app_v2.py
-# (O código de carregar_dados, calcular_score e a UI do streamlit)
+# --- O RESTANTE DO CÓDIGO (PARTE 2) É IDÊNTICO ---
 
 def carregar_dados_do_db():
     if not os.path.exists(DB_FILE):
@@ -141,15 +141,21 @@ def calcular_score_pro(df):
     if df_filtrado.empty:
         df['Score Pro'] = 0
         return df
-    df_filtrado['dy_norm'] = 100 * (df_filtrado['DY_12M'] - df_filtrado['DY_12M'].min()) / (df_filtrado['DY_12M'].max() - df_filtrado['DY_12M'].min())
-    df_filtrado['pvp_norm'] = 100 * (df_filtrado['P_VP'].max() - df_filtrado['P_VP']) / (df_filtrado['P_VP'].max() - df_filtrado['P_VP'].min())
+    # Evita divisão por zero se todos os valores forem iguais
+    if (df_filtrado['DY_12M'].max() - df_filtrado['DY_12M'].min()) == 0 or (df_filtrado['P_VP'].max() - df_filtrado['P_VP'].min()) == 0:
+        df_filtrado['dy_norm'] = 50
+        df_filtrado['pvp_norm'] = 50
+    else:
+        df_filtrado['dy_norm'] = 100 * (df_filtrado['DY_12M'] - df_filtrado['DY_12M'].min()) / (df_filtrado['DY_12M'].max() - df_filtrado['DY_12M'].min())
+        df_filtrado['pvp_norm'] = 100 * (df_filtrado['P_VP'].max() - df_filtrado['P_VP']) / (df_filtrado['P_VP'].max() - df_filtrado['P_VP'].min())
+        
     df_filtrado['Score Pro'] = (df_filtrado['dy_norm'] * 0.6) + (df_filtrado['pvp_norm'] * 0.4)
     df_final = df.merge(df_filtrado[['Ticker', 'Score Pro']], on='Ticker', how='left')
     df_final['Score Pro'] = df_final['Score Pro'].fillna(0).astype(int)
     return df_final
 
 # --- PARTE 2: O APLICATIVO WEB (STREAMLIT) ---
-st.title("🛰️ Radar FII Pro (Cloud V1)")
+st.title("🛰️ Radar FII Pro (Cloud V2)")
 st.subheader("Encontrando as melhores oportunidades em Fundos Imobiliários")
 
 inicializar_db()
